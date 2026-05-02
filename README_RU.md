@@ -14,6 +14,32 @@ CLI-инструмент для генерации Go-проектов. Созд
 go install github.com/anxi0uz/gofro@latest
 ```
 
+`go install` кладёт бинарник в `$(go env GOPATH)/bin` (обычно `~/go/bin`). Убедись, что эта директория есть в `$PATH`.
+
+### Добавление GOPATH/bin в PATH
+
+**bash** — добавь в `~/.bashrc` или `~/.bash_profile`:
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**zsh** — добавь в `~/.zshrc`:
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**fish** — добавь в `~/.config/fish/config.fish`:
+```fish
+fish_add_path (go env GOPATH)/bin
+```
+
+После редактирования перезагрузи шелл (`source ~/.bashrc` / `source ~/.zshrc`) или открой новый терминал. Проверь:
+
+```sh
+gofro --help
+gofro --version
+```
+
 ## Использование
 
 ```sh

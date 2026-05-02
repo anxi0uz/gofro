@@ -3,9 +3,23 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
+
+var version = "dev"
+
+func init() {
+	if version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			if v := info.Main.Version; v != "" && v != "(devel)" {
+				version = v
+			}
+		}
+	}
+	rootCmd.Version = version
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "gofro",

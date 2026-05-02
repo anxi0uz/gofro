@@ -14,6 +14,32 @@ Inspired by [logiflow](https://github.com/anxi0uz/logiflow).
 go install github.com/anxi0uz/gofro@latest
 ```
 
+`go install` puts the binary in `$(go env GOPATH)/bin` (usually `~/go/bin`). Make sure that directory is in your `$PATH`.
+
+### Adding GOPATH/bin to PATH
+
+**bash** — add to `~/.bashrc` or `~/.bash_profile`:
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**zsh** — add to `~/.zshrc`:
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**fish** — add to `~/.config/fish/config.fish`:
+```fish
+fish_add_path (go env GOPATH)/bin
+```
+
+After editing the file, reload your shell (`source ~/.bashrc` / `source ~/.zshrc`) or open a new terminal. Then verify:
+
+```sh
+gofro --help
+gofro --version
+```
+
 ## Usage
 
 ```sh
