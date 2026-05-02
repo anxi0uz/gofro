@@ -1,0 +1,110 @@
+package config
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/knadh/koanf/parsers/toml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+)
+
+type Config struct {
+	App    AppConfig    `koanf:"app"`
+	Server ServerConfig `koanf:"server"`
+	JWT    JWTConfig    `koanf:"jwt"`
+{{- if .Postgres}}
+	Database DatabaseConfig `koanf:"database"`
+{{- end}}
+{{- if .Redis}}
+	Redis RedisConfig `koanf:"redis"`
+{{- end}}
+{{- if .Prometheus}}
+	Prometheus PrometheusConfig `koanf:"prometheus"`
+{{- end}}
+}
+
+type AppConfig struct {
+	LogLevel int `koanf:"logLevel"`
+}
+
+type ServerConfig struct {
+	Host         string `koanf:"host"`
+	Port         int    `koanf:"port"`
+	ReadTimeout  string `koanf:"readTimeout"`
+	WriteTimeout string `koanf:"writeTimeout"`
+	IdleTimeout  string `koanf:"idleTimeout"`
+}
+
+func (s *ServerConfig) Addr() string {
+	return fmt.Sprintf("%s:%d", s.Host, s.Port)
+}
+
+func (s *ServerConfig) ReadTimeoutDuration() time.Duration {
+	d, _ := time.ParseDuration(s.ReadTimeout)
+	return d
+}
+
+func (s *ServerConfig) WriteTimeoutDuration() time.Duration {
+	d, _ := time.ParseDuration(s.WriteTimeout)
+	return d
+}
+
+func (s *ServerConfig) IdleTimeoutDuration() time.Duration {
+	d, _ := time.ParseDuration(s.IdleTimeout)
+	return d
+}
+
+type JWTConfig struct {
+	Secret   string `koanf:"secret"`
+	Issuer   string `koanf:"issuer"`
+	Audience string `koanf:"audience"`
+}
+{{- if .Postgres}}
+
+type DatabaseConfig struct {
+	Host     string `koanf:"host"`
+	Port     int    `koanf:"port"`
+	User     string `koanf:"user"`
+	Password string `koanf:"password"`
+	Name     string `koanf:"name"`
+	SSLMode  string `koanf:"sslmode"`
+}
+
+func (d *DatabaseConfig) DSN() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		d.User, d.Password, d.Host, d.Port, d.Name, d.SSLMode)
+}
+{{- end}}
+{{- if .Redis}}
+
+type RedisConfig struct {
+	Addr     string `koanf:"addr"`
+	Password string `koanf:"password"`
+	DB       int    `koanf:"db"`
+}
+{{- end}}
+{{- if .Prometheus}}
+
+type PrometheusConfig struct {
+	Port int `koanf:"port"`
+}
+{{- end}}
+
+func New(configPath string) (*Config, error) {
+	_ = godotenv.Load()
+
+	k := koanf.New(".")
+
+	if err := k.Load(file.Provider(configPath), toml.Parser()); err != nil {
+		return nil, fmt.Errorf("load config file: %w", err)
+	}
+
+	cfg := &Config{}
+	if err := k.Unmarshal("", cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	return cfg, nil
+}

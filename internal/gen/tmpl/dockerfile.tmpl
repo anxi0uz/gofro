@@ -1,0 +1,24 @@
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/{{.ProjectName}} ./cmd/
+
+FROM alpine:3.20
+
+RUN adduser -D -u 1000 app
+
+COPY --chown=app:app configs/ /app/configs/
+{{- if .Postgres}}
+COPY --chown=app:app migrations/ /app/migrations/
+{{- end}}
+COPY --chown=app:app --from=builder /bin/{{.ProjectName}} /app/{{.ProjectName}}
+
+USER app
+WORKDIR /app
+EXPOSE 8080
+CMD ["/app/{{.ProjectName}}"]

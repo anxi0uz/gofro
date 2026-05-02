@@ -1,0 +1,154 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"{{.ModulePath}}/internal/config"
+{{- if .Postgres}}
+	"github.com/jackc/pgx/v5/pgxpool"
+{{- end}}
+{{- if .Redis}}
+	"github.com/redis/go-redis/v9"
+{{- end}}
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+)
+
+type Server struct {
+	cfg *config.Config
+	ctx context.Context
+{{- if .Postgres}}
+	db  *pgxpool.Pool
+{{- end}}
+{{- if .Redis}}
+	rdb *redis.Client
+{{- end}}
+}
+
+type apiResponse struct {
+	RequestID string         `json:"request_id,omitempty"`
+	Status    int            `json:"status"`
+	Success   bool           `json:"success"`
+	Data      map[string]any `json:"data,omitempty"`
+}
+
+func NewServer(
+{{- if .Postgres}}
+	db *pgxpool.Pool,
+{{- end}}
+{{- if .Redis}}
+	rdb *redis.Client,
+{{- end}}
+	cfg *config.Config,
+) *Server {
+	return &Server{
+		cfg: cfg,
+		ctx: context.Background(),
+{{- if .Postgres}}
+		db:  db,
+{{- end}}
+{{- if .Redis}}
+		rdb: rdb,
+{{- end}}
+	}
+}
+
+// JSON writes a standardised JSON envelope. respType is the key under "data" (e.g. "user", "order").
+func (s *Server) JSON(w http.ResponseWriter, r *http.Request, status int, respType string, payload any) {
+	rid := middleware.GetReqID(r.Context())
+	resp := apiResponse{
+		RequestID: rid,
+		Status:    status,
+		Success:   status >= 200 && status < 300,
+	}
+	if payload != nil {
+		resp.Data = map[string]any{respType: payload}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(r.Context(), "json encode failed",
+			slog.Int("status", status),
+			slog.String("error", err.Error()),
+			slog.String("request_id", rid),
+		)
+	}
+}
+
+func (s *Server) Routes() http.Handler {
+	r := chi.NewMux()
+
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+	r.Use(middleware.RequestID)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		s.JSON(w, r, http.StatusOK, "health", map[string]string{"status": "ok"})
+	})
+
+	// After running `go generate ./internal/api/...`, mount the generated router:
+	// api.HandlerFromMux(s, r)
+
+	return r
+}
+
+func (s *Server) Run() error {
+	srv := &http.Server{
+		Addr:         s.cfg.Server.Addr(),
+		Handler:      s.Routes(),
+		ReadTimeout:  s.cfg.Server.ReadTimeoutDuration(),
+		WriteTimeout: s.cfg.Server.WriteTimeoutDuration(),
+		IdleTimeout:  s.cfg.Server.IdleTimeoutDuration(),
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		slog.Info("server starting", slog.String("addr", s.cfg.Server.Addr()))
+		serverErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case sig := <-sigChan:
+		slog.Info("shutdown signal received", slog.String("signal", sig.String()))
+	case err := <-serverErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	slog.Info("server stopped")
+	return nil
+}

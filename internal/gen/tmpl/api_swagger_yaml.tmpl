@@ -1,0 +1,48 @@
+openapi: "3.0.3"
+
+info:
+  title: "{{.ProjectName}} API"
+  version: "0.1.0"
+
+servers:
+  - url: "http://localhost:8080"
+    description: "Local development"
+
+paths:
+  /health:
+    get:
+      summary: "Health check"
+      operationId: "GetHealth"
+      tags: [system]
+      security: []
+      responses:
+        "200":
+          description: "Service is healthy"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+
+components:
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+        status:
+          type: integer
+        success:
+          type: boolean
+        data:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []

@@ -1,0 +1,76 @@
+package main
+
+import (
+{{- if or .Postgres .Redis}}
+	"context"
+{{- end}}
+	"log/slog"
+	"os"
+
+	"{{.ModulePath}}/internal/config"
+{{- if or .Postgres .Redis}}
+	"{{.ModulePath}}/internal/database"
+{{- end}}
+	"{{.ModulePath}}/internal/handler"
+	"github.com/golang-cz/devslog"
+)
+
+func main() {
+	setupLogger()
+
+	cfg, err := config.New("configs/config.toml")
+	if err != nil {
+		slog.Error("failed to load config", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	slog.SetLogLoggerLevel(slog.Level(cfg.App.LogLevel))
+{{- if .Postgres}}
+
+	pool, err := database.NewPostgresPool(context.Background(), cfg.Database.DSN())
+	if err != nil {
+		slog.Error("failed to connect to postgres", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(context.Background(), cfg.Database.DSN()); err != nil {
+		slog.Error("failed to run migrations", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+{{- end}}
+{{- if .Redis}}
+
+	rdb, err := database.NewRedisClient(context.Background(), cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	if err != nil {
+		slog.Error("failed to connect to redis", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			slog.Warn("redis close error", slog.String("error", err.Error()))
+		}
+	}()
+{{- end}}
+
+	if err := handler.NewServer(
+{{- if .Postgres}}
+		pool,
+{{- end}}
+{{- if .Redis}}
+		rdb,
+{{- end}}
+		cfg,
+	).Run(); err != nil {
+		slog.Error("server stopped with error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+}
+
+func setupLogger() {
+	opts := &devslog.Options{
+		TimeFormat:      "15:04:05.000",
+		NewLineAfterLog: true,
+	}
+	slog.SetDefault(slog.New(devslog.NewHandler(os.Stdout, opts)))
+}

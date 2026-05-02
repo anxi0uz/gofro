@@ -1,0 +1,101 @@
+name: {{.ProjectName}}
+
+services:
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+{{- if or .Postgres .Redis}}
+    depends_on:
+{{- if .Postgres}}
+      postgres:
+        condition: service_healthy
+{{- end}}
+{{- if .Redis}}
+      redis:
+        condition: service_healthy
+{{- end}}
+{{- end}}
+    networks:
+      - {{.ProjectName}}-net
+{{- if .Postgres}}
+
+  postgres:
+    image: postgres:17-alpine
+    env_file: .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - {{.ProjectName}}-net
+{{- end}}
+{{- if .Redis}}
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - {{.ProjectName}}-net
+{{- end}}
+{{- if .Prometheus}}
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - {{.ProjectName}}-net
+{{- end}}
+{{- if .Grafana}}
+
+  grafana:
+    image: grafana/grafana:latest
+    env_file: .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - {{.ProjectName}}-net
+{{- end}}
+
+networks:
+  {{.ProjectName}}-net:
+{{- if or .Postgres .Redis .Prometheus .Grafana}}
+
+volumes:
+{{- if .Postgres}}
+  postgres-data:
+{{- end}}
+{{- if .Redis}}
+  redis-data:
+{{- end}}
+{{- if .Prometheus}}
+  prometheus-data:
+{{- end}}
+{{- if .Grafana}}
+  grafana-data:
+{{- end}}
+{{- end}}

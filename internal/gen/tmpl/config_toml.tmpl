@@ -1,0 +1,32 @@
+[app]
+logLevel = 0
+
+[server]
+host = "0.0.0.0"
+port = 8080
+readTimeout = "10s"
+writeTimeout = "30s"
+idleTimeout = "60s"
+
+[jwt]
+issuer = "{{.ProjectName}}-server"
+audience = "{{.ProjectName}}-client"
+{{- if .Postgres}}
+
+[database]
+host = "postgres"
+port = 5432
+name = "{{.ProjectName}}"
+sslmode = "disable"
+{{- end}}
+{{- if .Redis}}
+
+[redis]
+addr = "redis:6379"
+db = 0
+{{- end}}
+{{- if .Prometheus}}
+
+[prometheus]
+port = 2112
+{{- end}}

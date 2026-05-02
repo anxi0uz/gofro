@@ -1,0 +1,24 @@
+package database
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/redis/go-redis/v9"
+)
+
+func NewRedisClient(ctx context.Context, addr, password string, db int) (*redis.Client, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Password: password,
+		DB:       db,
+	})
+
+	if _, err := client.Ping(ctx).Result(); err != nil {
+		return nil, fmt.Errorf("ping redis: %w", err)
+	}
+
+	slog.InfoContext(ctx, "connected to redis")
+	return client, nil
+}
