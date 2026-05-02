@@ -8,23 +8,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
-
-func init() {
-	if version == "dev" {
-		if info, ok := debug.ReadBuildInfo(); ok {
-			if v := info.Main.Version; v != "" && v != "(devel)" {
-				version = v
-			}
-		}
-	}
-	rootCmd.Version = version
+var rootCmd = &cobra.Command{
+	Use:     "gofro",
+	Short:   "Go project scaffolding tool",
+	Long:    "gofro generates opinionated Go project structures ready for production.",
+	Version: buildVersion(),
 }
 
-var rootCmd = &cobra.Command{
-	Use:   "gofro",
-	Short: "Go project scaffolding tool",
-	Long:  "gofro generates opinionated Go project structures ready for production.",
+func buildVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
 }
 
 func Execute() {
