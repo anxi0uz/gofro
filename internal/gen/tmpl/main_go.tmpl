@@ -1,11 +1,13 @@
 package main
 
 import (
-{{- if or .Postgres .Redis}}
 	"context"
-{{- end}}
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"{{.ModulePath}}/internal/config"
 {{- if or .Postgres .Redis}}
@@ -16,34 +18,37 @@ import (
 )
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	setupLogger()
 
 	cfg, err := config.New("configs/config.toml")
 	if err != nil {
-		slog.Error("failed to load config", slog.String("error", err.Error()))
+		slog.ErrorContext(ctx, "failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	slog.SetLogLoggerLevel(slog.Level(cfg.App.LogLevel))
 {{- if .Postgres}}
 
-	pool, err := database.NewPostgresPool(context.Background(), cfg.Database.DSN())
+	pool, err := database.NewPostgresPool(ctx, cfg.Database.DSN())
 	if err != nil {
-		slog.Error("failed to connect to postgres", slog.String("error", err.Error()))
+		slog.ErrorContext(ctx, "failed to connect to postgres", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	if err := database.RunMigrations(context.Background(), cfg.Database.DSN()); err != nil {
-		slog.Error("failed to run migrations", slog.String("error", err.Error()))
+	if err := database.RunMigrations(ctx, cfg.Database.DSN()); err != nil {
+		slog.ErrorContext(ctx, "failed to run migrations", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 {{- end}}
 {{- if .Redis}}
 
-	rdb, err := database.NewRedisClient(context.Background(), cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	rdb, err := database.NewRedisClient(ctx, cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
-		slog.Error("failed to connect to redis", slog.String("error", err.Error()))
+		slog.ErrorContext(ctx, "failed to connect to redis", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer func() {
@@ -53,18 +58,38 @@ func main() {
 	}()
 {{- end}}
 
-	if err := handler.NewServer(
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- handler.NewServer(
+			ctx,
 {{- if .Postgres}}
-		pool,
+			pool,
 {{- end}}
 {{- if .Redis}}
-		rdb,
+			rdb,
 {{- end}}
-		cfg,
-	).Run(); err != nil {
-		slog.Error("server stopped with error", slog.String("error", err.Error()))
+			cfg,
+		).Run()
+	}()
+
+	select {
+	case sig := <-sigChan:
+		slog.InfoContext(ctx, "shutdown signal received", slog.String("signal", sig.String()))
+	case err := <-serverErr:
+		slog.ErrorContext(ctx, "server error", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	cancel()
+
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.ErrorContext(ctx, "server shutdown error", slog.String("error", err.Error()))
+	}
+
+	slog.InfoContext(ctx, "server stopped")
 }
 
 func setupLogger() {
