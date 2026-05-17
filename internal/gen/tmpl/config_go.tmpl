@@ -1,110 +1,235 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/toml"
+	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
 
 type Config struct {
-	App    AppConfig    `koanf:"app"`
-	Server ServerConfig `koanf:"server"`
-	JWT    JWTConfig    `koanf:"jwt"`
-{{- if .Postgres}}
-	Database DatabaseConfig `koanf:"database"`
-{{- end}}
-{{- if .Redis}}
-	Redis RedisConfig `koanf:"redis"`
-{{- end}}
-{{- if .Prometheus}}
-	Prometheus PrometheusConfig `koanf:"prometheus"`
-{{- end}}
-}
+	App struct {
+		LogLevel slog.Level `koanf:"logLevel"`
+	} `koanf:"app"`
 
-type AppConfig struct {
-	LogLevel int `koanf:"logLevel"`
-}
+	Server struct {
+		Host            string        `koanf:"host"`
+		Port            int           `koanf:"port"`
+		ReadTimeout     string        `koanf:"readTimeout"`
+		WriteTimeout    string        `koanf:"writeTimeout"`
+		IdleTimeout     string        `koanf:"idleTimeout"`
+		ReadTimeoutDur  time.Duration
+		WriteTimeoutDur time.Duration
+		IdleTimeoutDur  time.Duration
+		URL             string
+	} `koanf:"server"`
 
-type ServerConfig struct {
-	Host         string `koanf:"host"`
-	Port         int    `koanf:"port"`
-	ReadTimeout  string `koanf:"readTimeout"`
-	WriteTimeout string `koanf:"writeTimeout"`
-	IdleTimeout  string `koanf:"idleTimeout"`
-}
-
-func (s *ServerConfig) Addr() string {
-	return fmt.Sprintf("%s:%d", s.Host, s.Port)
-}
-
-func (s *ServerConfig) ReadTimeoutDuration() time.Duration {
-	d, _ := time.ParseDuration(s.ReadTimeout)
-	return d
-}
-
-func (s *ServerConfig) WriteTimeoutDuration() time.Duration {
-	d, _ := time.ParseDuration(s.WriteTimeout)
-	return d
-}
-
-func (s *ServerConfig) IdleTimeoutDuration() time.Duration {
-	d, _ := time.ParseDuration(s.IdleTimeout)
-	return d
-}
-
-type JWTConfig struct {
-	Secret   string `koanf:"secret"`
-	Issuer   string `koanf:"issuer"`
-	Audience string `koanf:"audience"`
-}
+	JWT struct {
+		Key      string `koanf:"key"`
+		Issuer   string `koanf:"issuer"`
+		Audience string `koanf:"audience"`
+	} `koanf:"jwt"`
 {{- if .Postgres}}
 
-type DatabaseConfig struct {
-	Host     string `koanf:"host"`
-	Port     int    `koanf:"port"`
-	User     string `koanf:"user"`
-	Password string `koanf:"password"`
-	Name     string `koanf:"name"`
-	SSLMode  string `koanf:"sslmode"`
-}
-
-func (d *DatabaseConfig) DSN() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		d.User, d.Password, d.Host, d.Port, d.Name, d.SSLMode)
-}
+	Database struct {
+		Host     string `koanf:"host"`
+		Port     int    `koanf:"port"`
+		User     string `koanf:"user"`
+		Password string `koanf:"password"`
+		Name     string `koanf:"name"`
+		SslMode  string `koanf:"sslmode"`
+		URL      string
+	} `koanf:"database"`
 {{- end}}
 {{- if .Redis}}
 
-type RedisConfig struct {
-	Addr     string `koanf:"addr"`
-	Password string `koanf:"password"`
-	DB       int    `koanf:"db"`
-}
+	Redis struct {
+		Addr     string `koanf:"addr"`
+		Password string `koanf:"password"`
+		DB       int    `koanf:"db"`
+	} `koanf:"redis"`
 {{- end}}
 {{- if .Prometheus}}
 
-type PrometheusConfig struct {
-	Port int `koanf:"port"`
-}
+	Prometheus struct {
+		Port int `koanf:"port"`
+	} `koanf:"prometheus"`
 {{- end}}
+}
 
-func New(configPath string) (*Config, error) {
-	_ = godotenv.Load()
+func New(ctx context.Context, configPath string) (*Config, error) {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		slog.WarnContext(ctx, "failed to load .env", "error", err)
+	}
 
 	k := koanf.New(".")
 
-	if err := k.Load(file.Provider(configPath), toml.Parser()); err != nil {
-		return nil, fmt.Errorf("load config file: %w", err)
+	if err := k.Load(env.Provider("APP_", ".", func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "APP_")), "_", ".")
+	}), nil); err != nil {
+		return nil, fmt.Errorf("load env: %w", err)
 	}
 
-	cfg := &Config{}
-	if err := k.Unmarshal("", cfg); err != nil {
+	if err := k.Load(file.Provider(configPath), toml.Parser()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("load config file: %w", err)
+		}
+		slog.InfoContext(ctx, "config.toml not found — using env and defaults only")
+	}
+
+	var cfg Config
+	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	return cfg, nil
+	cfg.setDefaults()
+
+	if err := cfg.parseDurations(); err != nil {
+		return nil, fmt.Errorf("parse durations: %w", err)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	cfg.Server.URL = fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+{{- if .Postgres}}
+	cfg.Database.URL = cfg.makePostgresURL()
+{{- end}}
+
+	slog.InfoContext(ctx, "config loaded",
+		slog.String("server", cfg.Server.URL),
+{{- if .Postgres}}
+		slog.String("db_host", cfg.Database.Host),
+		slog.String("db_user", cfg.Database.User),
+		slog.String("db_pass", maskSecret(cfg.Database.Password)),
+		slog.String("db_name", cfg.Database.Name),
+{{- end}}
+{{- if .Redis}}
+		slog.String("redis_addr", cfg.Redis.Addr),
+{{- end}}
+		slog.String("log_level", cfg.App.LogLevel.String()),
+	)
+
+	return &cfg, nil
+}
+
+func (c *Config) setDefaults() {
+	if c.App.LogLevel == 0 {
+		c.App.LogLevel = slog.LevelInfo
+	}
+	if c.Server.Host == "" {
+		c.Server.Host = "0.0.0.0"
+	}
+	if c.Server.Port == 0 {
+		c.Server.Port = 8080
+	}
+	if c.Server.ReadTimeout == "" {
+		c.Server.ReadTimeout = "10s"
+	}
+	if c.Server.WriteTimeout == "" {
+		c.Server.WriteTimeout = "30s"
+	}
+	if c.Server.IdleTimeout == "" {
+		c.Server.IdleTimeout = "60s"
+	}
+{{- if .Postgres}}
+	if c.Database.Host == "" {
+		c.Database.Host = "localhost"
+	}
+	if c.Database.Port == 0 {
+		c.Database.Port = 5432
+	}
+	if c.Database.SslMode == "" {
+		c.Database.SslMode = "disable"
+	}
+{{- end}}
+{{- if .Redis}}
+	if c.Redis.Addr == "" {
+		c.Redis.Addr = "localhost:6379"
+	}
+{{- end}}
+}
+
+func (c *Config) parseDurations() error {
+	parse := func(name, s string) (time.Duration, error) {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return 0, fmt.Errorf("%s %q: %w", name, s, err)
+		}
+		return d, nil
+	}
+
+	var err error
+
+	c.Server.ReadTimeoutDur, err = parse("readTimeout", c.Server.ReadTimeout)
+	if err != nil {
+		return err
+	}
+	c.Server.WriteTimeoutDur, err = parse("writeTimeout", c.Server.WriteTimeout)
+	if err != nil {
+		return err
+	}
+	c.Server.IdleTimeoutDur, err = parse("idleTimeout", c.Server.IdleTimeout)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Config) validate() error {
+	if c.JWT.Key == "" {
+		return fmt.Errorf("jwt.key is required")
+	}
+{{- if .Postgres}}
+	if c.Database.User == "" {
+		return fmt.Errorf("database.user is required")
+	}
+	if c.Database.Password == "" {
+		return fmt.Errorf("database.password is required")
+	}
+	if c.Database.Name == "" {
+		return fmt.Errorf("database.name is required")
+	}
+{{- end}}
+	return nil
+}
+{{- if .Postgres}}
+
+func (c *Config) makePostgresURL() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.Database.User,
+		c.Database.Password,
+		c.Database.Host,
+		c.Database.Port,
+		c.Database.Name,
+		c.Database.SslMode,
+	)
+}
+
+func (c *Config) DatabaseURL() string { return c.Database.URL }
+{{- end}}
+
+func (c *Config) ServerURL() string           { return c.Server.URL }
+func (c *Config) ReadTimeout() time.Duration  { return c.Server.ReadTimeoutDur }
+func (c *Config) WriteTimeout() time.Duration { return c.Server.WriteTimeoutDur }
+func (c *Config) IdleTimeout() time.Duration  { return c.Server.IdleTimeoutDur }
+
+func maskSecret(s string) string {
+	if s == "" {
+		return "<empty>"
+	}
+	if len(s) <= 4 {
+		return "****"
+	}
+	return s[:2] + strings.Repeat("*", len(s)-4) + s[len(s)-2:]
 }

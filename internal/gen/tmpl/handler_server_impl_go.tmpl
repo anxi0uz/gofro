@@ -106,11 +106,11 @@ func (s *Server) Run() error {
 	// api.HandlerFromMux(s, r)
 
 	srv := &http.Server{
-		Addr:         s.cfg.Server.Addr(),
+		Addr:         s.cfg.ServerURL(),
 		Handler:      r,
-		ReadTimeout:  s.cfg.Server.ReadTimeoutDuration(),
-		WriteTimeout: s.cfg.Server.WriteTimeoutDuration(),
-		IdleTimeout:  s.cfg.Server.IdleTimeoutDuration(),
+		ReadTimeout:  s.cfg.ReadTimeout(),
+		WriteTimeout: s.cfg.WriteTimeout(),
+		IdleTimeout:  s.cfg.IdleTimeout(),
 	}
 
 	go func() {
@@ -119,7 +119,7 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	slog.Info("server started", slog.String("addr", s.cfg.Server.Addr()))
+	slog.Info("server started", slog.String("addr", s.cfg.ServerURL()))
 
 	<-s.ctx.Done()
 

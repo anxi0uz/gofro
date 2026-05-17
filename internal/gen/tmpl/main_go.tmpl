@@ -23,23 +23,23 @@ func main() {
 
 	setupLogger()
 
-	cfg, err := config.New("configs/config.toml")
+	cfg, err := config.New(ctx, "configs/config.toml")
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	slog.SetLogLoggerLevel(slog.Level(cfg.App.LogLevel))
+	slog.SetLogLoggerLevel(cfg.App.LogLevel)
 {{- if .Postgres}}
 
-	pool, err := database.NewPostgresPool(ctx, cfg.Database.DSN())
+	pool, err := database.NewPostgresPool(ctx, cfg.DatabaseURL())
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to connect to postgres", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	if err := database.RunMigrations(ctx, cfg.Database.DSN()); err != nil {
+	if err := database.RunMigrations(ctx, cfg.DatabaseURL()); err != nil {
 		slog.ErrorContext(ctx, "failed to run migrations", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
